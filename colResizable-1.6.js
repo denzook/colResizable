@@ -11,9 +11,14 @@
 	Licences: MIT & GPL
 	Feel free to use or modify this plugin as far as my full name is kept	
 	
+	**modified to support by denzook for 
+		- colspan
+		- dblclick
+		- tooltip
+		- container
+	
 	If you are going to use this plug-in in production environments it is 
 	strongly recommended to use its minified version: colResizable.min.js
-
 */
 
 (function($){ 	
@@ -38,7 +43,17 @@
 	try{S = sessionStorage;}catch(e){}	//Firefox crashes when executed as local file system
 	
 	//append required CSS rules  
-    h.append("<style type='text/css'>  .JColResizer{table-layout:fixed;} .JColResizer > tbody > tr > td, .JColResizer > tbody > tr > th{overflow:hidden;padding-left:0!important; padding-right:0!important;}  .JCLRgrips{ height:0px; position:relative;} .JCLRgrip{margin-left:-5px; position:absolute; z-index:5; } .JCLRgrip .JColResizer{position:absolute;background-color:red;filter:alpha(opacity=1);opacity:0;width:10px;height:100%;cursor: e-resize;top:0px} .JCLRLastGrip{position:absolute; width:1px; } .JCLRgripDrag{ border-left:1px dotted black;	} .JCLRFlex{width:auto!important;} .JCLRgrip.JCLRdisabledGrip .JColResizer{cursor:default; display:none;}</style>");
+    h.append("<style type='text/css'>  " +
+		".JColResizer{table-layout:fixed;} " +
+		//".JColResizer > tbody > tr > td, .JColResizer > tbody > tr > th{overflow:hidden;padding-left:0!important; padding-right:0!important;}  " +
+		".JCLRgrips{ height:0px; position:relative;} " +
+		".JCLRgrip{margin-left:-5px; position:absolute; z-index:5; } " +
+		".JCLRgrip .JColResizer{position:absolute;background-color:red;filter:alpha(opacity=1);opacity:0;width:10px;height:100%;top:0px} " + //cursor: e-resize;
+		".JCLRLastGrip{position:absolute; }" +  //width:1px; 
+		".JCLRgripDrag{ border-left:1px dotted black;} " +
+		".JCLRFlex{width:auto!important;} " +
+		".JCLRgrip.JCLRdisabledGrip .JColResizer{cursor:default; display:none;}" +
+		"</style>");
 
 	
 	/**
@@ -54,20 +69,130 @@
 		if(t.opt.disable) return destroy(t);				//the user is asking to destroy a previously colResized table
 		var	id = t.id = t.attr(ID) || SIGNATURE+count++;	//its id is obtained, if null new one is generated		
 		t.p = t.opt.postbackSafe; 							//short-cut to detect postback safe 		
-		if(!t.is("table") || tables[id] && !t.opt.partialRefresh) return; 		//if the object is not a table or if it was already processed then it is ignored.
-		if (t.opt.hoverCursor !== 'e-resize') h.append("<style type='text/css'>.JCLRgrip .JColResizer:hover{cursor:"+ t.opt.hoverCursor +"!important}</style>");  //if hoverCursor has been set, append the style
-		t.addClass(SIGNATURE).attr(ID, id).before('<div class="JCLRgrips"/>');	//the grips container object is added. Signature class forces table rendering in fixed-layout mode to prevent column's min-width
+		if(!t.is("table") || (tables[id] && !t.opt.refresh && !t.opt.partialRefresh)) return; 		//if the object is not a table or if it was already processed then it is ignored.
+		//if (t.opt.hoverCursor !== t.opt.dragCursor) 
+		//	h.append("<style type='text/css'>.JCLRgrip .JColResizer:hover{cursor:"+ t.opt.hoverCursor +"!important}</style>");  //if hoverCursor has been set, append the style
+		if(tables[id]) { 
+			if(t.opt.refresh == "quick") { syncGrips(t =tables[id], true); return; }
+			if(t.opt.refresh == "full") (t =tables[id]).gc.empty();
+			else return;
+		}
+		else t.addClass(SIGNATURE).attr(ID, id).before('<div class="JCLRgrips"/>');	//the grips container object is added. Signature class forces table rendering in fixed-layout mode to prevent column's min-width 
+		
 		t.g = []; t.c = []; t.w = t.width(); t.gc = t.prev(); t.f=t.opt.fixed;	//t.c and t.g are arrays of columns and grips respectively				
 		if(options.marginLeft) t.gc.css("marginLeft", options.marginLeft);  	//if the table contains margins, it must be specified
 		if(options.marginRight) t.gc.css("marginRight", options.marginRight);  	//since there is no (direct) way to obtain margin values in its original units (%, em, ...)
 		t.cs = I(ie? tb.cellSpacing || tb.currentStyle.borderSpacing :t.css('border-spacing'))||2;	//table cellspacing (not even jQuery is fully cross-browser)
 		t.b  = I(ie? tb.border || tb.currentStyle.borderLeftWidth :t.css('border-left-width'))||1;	//outer border width (again cross-browser issues)
 		// if(!(tb.style.width || tb.width)) t.width(t.width()); //I am not an IE fan at all, but it is a pity that only IE has the currentStyle attribute working as expected. For this reason I can not check easily if the table has an explicit width or if it is rendered as "auto"
-		tables[id] = t; 	//the table object is stored using its id as key	
-		createGrips(t);		//grips are created 
-	
-	};
 
+		if(t.opt.container)
+		{
+			var div = t.opt.container;
+			if(div.tagName) div = $(div);
+			for(var p = t.parent(); p.length != 0; )
+			{
+				var filt = div.filter(p.get(0)); 
+				if(filt.length != 0) { 
+					t.wrapper = filt; 
+					t.wrapper.w = t.wrapper.width();
+					t.wrapper.offs = t.wrapper.w-t.w;
+					break; 
+				}
+			}
+		}
+		tables[id] = t; 	//the table object is stored using its id as key	
+		createGrips(t);		//grips are created
+    	//bind resize event, to update grips position 
+	};
+	
+	var extra = 
+	{
+		isHorzCellBoundary : function(t, g, x, y)
+		{
+			var col, tr= $("tr", t).filter(":visible"); var i,j;
+			for(i = 1; i < tr.length; i ++)
+			{
+				if(y < tr.get(i).offsetTop) { i --; break; }
+				if(i == tr.length-1 && y < t.eq(0).outerHeight(false)) break; 
+			}
+			col = $("th",tr.eq(i)).filter(":visible");
+			if(col.length == 0)
+			{
+				col = $("td",tr.eq(i)).filter(":visible");
+			}
+			
+			for(j = 0; j < col.length; j ++)
+			{
+				var c = col.get(j).offsetLeft+col.eq(j).outerWidth(false);
+				if(x < c+5) { 
+					if(x >= c-5) return true;
+					break; 
+				}
+			}
+			return false;
+		},
+		isColumnHidden : function(td)
+		{
+			return (td.get(0).scrollWidth > td.innerWidth());
+		},
+		mouseHover : function(e)
+		{
+			if(!drag) {
+				var oe = e.originalEvent.touches;           //touch or mouse event?
+				var o = $(this).data(SIGNATURE);			//retrieve grip's data
+				var t = tables[o.t],  g = t.g[o.i];			//shortcuts for the table and grip objects
+				if(e.type == "mouseleave") { 
+					g.css("cursor","");
+				}
+				else if(extra.isHorzCellBoundary (t,g,g.position().left, oe? oe[0].offsetY: e.offsetY)) { 
+					if(g.css("cursor") != t.opt.hoverCursor) g.css("cursor", t.opt.hoverCursor); 
+				}
+				else g.css("cursor","");
+			}
+			return true; 
+		},
+		
+		dblClick : function (e)
+		{
+			if(e.button != 0) return true;
+			var oe = e.originalEvent.touches;           //touch or mouse event?
+			var o = $(this).data(SIGNATURE);			//retrieve grip's data
+			var t = tables[o.t],  g = t.g[o.i];			//shortcuts for the table and grip objects
+			if(g.i < 0) return true;
+			if(!extra.isHorzCellBoundary (t,g,g.position().left, oe? oe[0].offsetY: e.offsetY)) return true;
+			
+			var c = g.c, w = c.width(); //the column double click
+			var tr= $("tbody>tr", t).filter(":visible"); var i,j;
+			var startX = (g.i<= 0)?0:t.g[g.i-1].position().left;
+			g.ox = g.l;
+			c.width(5+PX);
+			var tr= $("tbody>tr", t).filter(":visible"); var i,j;
+			var w0 = c.position().left+c.outerWidth(false);
+			var padleft = 15, maxW = 0;
+			for(i = 0; i < tr.length; i ++)
+			{
+				var cc =tr.eq(i).find("td:visible");
+				for(j = 0; j < cc.length; j ++)
+				{
+					var wc =cc.eq(j).position().left+cc.eq(j).outerWidth(false) ;
+					if(w0-5 > wc || wc >= w0+5) continue;
+					if(!extra.isColumnHidden(cc.eq(j))) continue;
+					maxW = M.max(maxW,cc.get(j).scrollWidth+padleft);
+				}
+			}
+			//if(maxW >0) 
+			{
+				i = g.i;
+				
+				
+				g.x = startX+maxW; g.css("left",  g.x + PX);
+				syncCols(t,i, true);
+				syncGrips(t, true);
+			}
+			//else c.width((w+PX);
+		}
+	};
 
 	/**
 	 * This function allows to remove any enhancements performed by this plugin on a previously processed table.
@@ -80,11 +205,10 @@
 		delete tables[id];						//clean up data
 	};
 
-
 	/**
 	 * Function to create all the grips associated with the table given by parameters 
 	 * @param {jQuery ref} t - table object
-	 */
+	 */	
 	var createGrips = function(t){	
 	
         var th = t.find(">thead>tr:first>th,>thead>tr:first>td"); //table headers are obtained
@@ -102,7 +226,10 @@
                 g.addClass("JCLRLastGrip");         //add a different css class to stlye it in a different way if needed
                 if(t.f) g.html("");                 //if the table resizing mode is set to fixed, the last grip is removed since table with can not change
             }
-            g.bind('touchstart mousedown', onGripMouseDown); //bind the mousedown event to start dragging 
+            g	.bind('touchstart mousedown', onGripMouseDown) //bind the mousedown event to start dragging
+            	.bind('touchmove mousemove mouseleave', extra.mouseHover)
+            	.bind('dblclick', extra.dblClick)
+            	; 
             
             if (!dc){ 
                 //if normal column bind the mousedown event to start dragging, if disabled then apply its css class
@@ -122,9 +249,13 @@
 			$(this).removeAttr('width');	//the width attribute is removed from all table cells which are not nested in other tables and dont belong to the header
 		});		
         if(!t.f){
-            t.removeAttr('width').addClass(FLEX); //if not fixed, let the table grow as needed
+            t.removeAttr('width');
+            if(!t.wrapper)t.addClass(FLEX); //if not fixed, let the table grow as needed
         }
-        syncGrips(t); 				//the grips are positioned according to the current table layout			
+		syncGrips(t,true); 				//the grips are positioned according to the current table layout
+		
+		// to be called with onResize();
+        
         //there is a small problem, some cells in the table could contain dimension values interfering with the 
         //width value set by this plugin. Those values are removed
 		
@@ -175,19 +306,28 @@
 	 * Function that places each grip in the correct position according to the current table layout	 
 	 * @param {jQuery ref} t - table object
 	 */
-	var syncGrips = function (t){	
+	var syncGrips = function (t, update){	
+		if(update && !t.f) applyBounds (t);
+		
 		t.gc.width(t.w);			//the grip's container width is updated				
+		
 		for(var i=0; i<t.ln; i++){	//for each column
-			var c = t.c[i]; 			
+			var c = t.c[i];
+			
 			t.g[i].css({			//height and position of the grip is updated according to the table layout
 				left: c.offset().left - t.offset().left + c.outerWidth(false) + t.cs / 2 + PX,
 				height: t.opt.headerOnly? t.c[0].outerHeight(false) : t.outerHeight(false)				
 			});			
-		} 	
+		}
+		
 	};
 	
-	
-	
+	var getMinWidth = function(c)
+	{
+		var r = c.css("min-width");
+		if(r && r.substr(-2) == "px") return parseInt (r.substr(0,r.length-2));
+		return 0;		
+	};
 	/**
 	* This function updates column's width according to the horizontal position increment of the grip being
 	* dragged. The function can be called while dragging if liveDragging is enabled and also from the onGripDragOver
@@ -197,19 +337,44 @@
 	* @param {bool} isOver - to identify when the function is being called from the onGripDragOver event	
 	*/
 	var syncCols = function(t,i,isOver){
-		var inc = drag.x-drag.l, c = t.c[i], c2 = t.c[i+1]; 			
-		var w = c.w + inc;	var w2= c2.w- inc;	//their new width is obtained					
-		c.width( w + PX);			
-		t.cg.eq(i).width( w + PX); 
-        if(t.f){ //if fixed mode
-            c2.width(w2 + PX);
+		var g = t.g[i];
+		var inc = g.x-g.l, c = t.c[i], c2 = t.c[i+1], inc2; 			
+		var w = c.w + inc;	
+		if(w < 0) { inc = -c.w; w = 0; }
+		var padleft = t.opt.cellPadding?t.opt.cellPadding:0;
+
+		c.width(w + PX);
+		
+		// if header beyond the scrollwidth or minwidth, need to readjust again
+		if((inc2= M.max(((inc2 = c.get(0).scrollWidth-c.innerWidth())>0)?(inc2+padleft):0,c.width()-w))
+			> 0 )
+		{
+			c.width((w+=inc2)+ PX); inc += inc2;
+		}
+		t.cg.eq(i).width( w + PX);
+        
+        if(i != t.ln-1 && t.f){ //if fixed mode
+        	var w2= c2.w- inc;	//their new width is obtained
+            c2.width(w2 + PX); 
+            if((inc2= M.max(((inc2 = c2.get(0).scrollWidth-c2.innerWidth())>0)?(inc2+padleft):0,c2.width()-w2)) 
+            	> 0 )
+			{
+				c2.width((w2+=inc2)+ PX); c.width((w -= inc2) + PX); t.cg.eq(i).width( w + PX);
+				inc -= inc2;
+			}
             t.cg.eq(i+1).width( w2 + PX);
         }else if(t.opt.overflow) {				//if overflow is set, incriment min-width to force overflow
             t.css('min-width', t.w + inc);
         }
+        else if(t.wrapper)
+        { 
+        	t.wrapper.width(t.wrapper.w+inc);
+        	t.width(t.w+inc);
+        }
 		if(isOver){
             c.w=w; 
-            c2.w= t.f ? w2 : c2.w;
+            if(t.f) c2.w = w2;
+			
         }
 	};
 
@@ -225,10 +390,18 @@
             return c.width();
         });
         t.width(t.w = t.width()).removeClass(FLEX);	//prevent table width changes
+        t.wrapper.width(t.wrapper.w = t.w+t.wrapper.offs); 
+        
         $.each(t.c, function(i,c){
             c.width(w[i]).w = w[i];				//set column widths applying bounds (table's max-width)
         });
-		t.addClass(FLEX);						//allow table width changes
+		
+		$.each($("tbody>tr>td:visible", t), function(i,c){
+            c = $(c);
+			if(extra.isColumnHidden(c)) c.attr("title", c.text());				//set column widths applying bounds (table's max-width)
+			else c.removeAttr("title");
+        });
+        if(!t.wrapper) t.addClass(FLEX);						//allow table width changes
 	};
 	
 	
@@ -236,13 +409,16 @@
 	 * Event handler used while dragging a grip. It checks if the next grip's position is valid and updates it. 
 	 * @param {event} e - mousemove event binded to the window object
 	 */
+	 
+	 
 	var onGripDrag = function(e){	
-		if(!drag) return; 
+		
+		if(!drag) return true;
+		var oe = e.originalEvent.touches;           //touch or mouse event? 
         var t = drag.t;		//table object reference 
-        var oe = e.originalEvent.touches;
         var ox = oe ? oe[0].pageX : e.pageX;    //original position (touch or mouse)
         var x =  ox - drag.ox + drag.l;	        //next position according to horizontal mouse position increment
-		var mw = t.opt.minWidth, i = drag.i ;	//cell's min width
+		var i = drag.i, mw = M.max(t.opt.minWidth,getMinWidth(t.c[i]));	//cell's min width
 		var l = t.cs*1.5 + mw + t.b;
         var last = i == t.ln-1;                 			//check if it is the last column's grip (usually hidden)
         var min = i? t.g[i-1].position().left+t.cs+mw: l;	//min position according to the contiguous cells
@@ -252,37 +428,39 @@
 				t.g[i+1].position().left-t.cs-mw:
 			Infinity; 								//max position according to the contiguous cells 
 		x = M.max(min, M.min(max, x));				//apply bounding		
+		
 		drag.x = x;	 drag.css("left",  x + PX); 	//apply position increment	
         if(last){									//if it is the last grip
-            var c = t.c[drag.i];					//width of the last column is obtained
+            var c = t.c[i];					//width of the last column is obtained
 			drag.w = c.w + x- drag.l;         
         }              
 		if(t.opt.liveDrag){ 			//if liveDrag is enabled
-			if(last){
-			    c.width(drag.w);
-                if(!t.f && t.opt.overflow){			//if overflow is set, incriment min-width to force overflow
-                   t.css('min-width', t.w + x - drag.l);
-                }else {
-                    t.w = t.width();
-                }
-			}else{
-				syncCols(t,i); 			//columns are synchronized
-			}
+			syncCols(t,i); 			//columns are synchronized
 			syncGrips(t);
 			var cb = t.opt.onDrag;							//check if there is an onDrag callback
-			if (cb) { e.currentTarget = t[0]; cb(e); }		//if any, it is fired			
+			if (cb) { e.currentTarget = t[0]; cb(e); }		//if any, it is fired
 		}
+
 		return false; 	//prevent text selection while dragging				
 	};
 	
-
+//
+//	if(last){
+//	    c.width(drag.w);
+//        if(!t.f && t.opt.overflow){			//if overflow is set, incriment min-width to force overflow
+//           t.css('min-width', t.w + x - drag.l);
+//        }else {
+//            t.w = t.width();
+//        }
+//	}else{
+	
 	/**
 	 * Event handler fired when the dragging is over, updating table layout
      * @param {event} e - grip's drag over event
 	 */
 	var onGripDragOver = function(e){	
 		
-		d.unbind('touchend.'+SIGNATURE+' mouseup.'+SIGNATURE).unbind('touchmove.'+SIGNATURE+' mousemove.'+SIGNATURE);
+		d.unbind('touchmove.'+SIGNATURE+' mousemove.'+SIGNATURE).unbind('touchend.'+SIGNATURE+' mouseup.'+SIGNATURE);
 		$("head :last-child").remove(); 				//remove the dragging cursor style	
 		if(!drag) return;
 		drag.removeClass(drag.t.opt.draggingClass);		//remove the grip's dragging css-class
@@ -292,14 +470,10 @@
             var i = drag.i;                 //column index
             var last = i == t.ln-1;         //check if it is the last column's grip (usually hidden)
             var c = t.g[i].c;               //the column being dragged
-            if(last){
-                c.width(drag.w);
-                c.w = drag.w;
-            }else{
-                syncCols(t, i, true);	//the columns are updated
-            }
-            if(!t.f) applyBounds(t);	//if not fixed mode, then apply bounds to obtain real width values
-            syncGrips(t);				//the grips are updated
+            syncCols(t, i, true);	//the columns are updated
+            
+            //if(!t.f) applyBounds(t);	//if not fixed mode, then apply bounds to obtain real width values
+            syncGrips(t, true);				//the grips are updated
             if (cb) { e.currentTarget = t[0]; cb(e); }	//if there is a callback function, it is fired
             if(t.p && S) memento(t); 	//if postbackSafe is enabled and there is sessionStorage support, the new layout is serialized and stored
         }
@@ -315,19 +489,21 @@
 	var onGripMouseDown = function(e){
 		var o = $(this).data(SIGNATURE);			//retrieve grip's data
 		var t = tables[o.t],  g = t.g[o.i];			//shortcuts for the table and grip objects
+		
         var oe = e.originalEvent.touches;           //touch or mouse event?
         g.ox = oe? oe[0].pageX: e.pageX;            //the initial position is kept
 		g.l = g.position().left;
         g.x = g.l;
+        if(!extra.isHorzCellBoundary (t, g, g.x, oe? oe[0].offsetY: e.offsetY)) return true;
         
-		d.bind('touchmove.'+SIGNATURE+' mousemove.'+SIGNATURE, onGripDrag ).bind('touchend.'+SIGNATURE+' mouseup.'+SIGNATURE, onGripDragOver);	//mousemove and mouseup events are bound
+		d.bind('touchmove.'+SIGNATURE+' mousemove.'+SIGNATURE, onGripDrag ).bind('touchend.'+SIGNATURE+' mouseup.'+SIGNATURE, onGripDragOver);//mousemove and mouseup events are bound
 		h.append("<style type='text/css'>*{cursor:"+ t.opt.dragCursor +"!important}</style>"); 	//change the mouse cursor
-		g.addClass(t.opt.draggingClass); 	//add the dragging class (to allow some visual feedback)				
+		g.addClass(t.opt.draggingClass); 	//add the dragging class (to allow some visual feedback)
+						
 		drag = g;							//the current grip is stored as the current dragging object
 		if(t.c[o.i].l) for(var i=0,c; i<t.ln; i++){ c=t.c[i]; c.l = false; c.w= c.width(); } 	//if the colum is locked (after browser resize), then c.w must be updated		
 		return false; 	//prevent text selection
 	};
-    
     
 	/**
 	 * Event handler fired when the browser is resized. The main purpose of this function is to update
@@ -348,7 +524,7 @@
                     //pretty well but it's a bit slower. For now, lets keep things simple...   
                     for(i=0; i<t.ln; i++) t.c[i].css("width", M.round(1000*t.c[i].w/mw)/10 + "%").l=true; 
                     //c.l locks the column, telling us that its c.w is outdated									
-                }else{     //in non fixed-sized tables
+                }else {     //in non fixed-sized tables
                     applyBounds(t);         //apply the new bounds 
                     if(t.mode == 'flex' && t.p && S){   //if postbackSafe is enabled and there is sessionStorage support,
                         memento(t);                     //the new layout is serialized and stored for 'flex' tables
@@ -361,9 +537,8 @@
 	};		
 
 
-	//bind resize event, to update grips position 
-	$(window).bind('resize.'+SIGNATURE, onResize); 
 
+	$(window).bind('resize.'+SIGNATURE, onResize);
 
 	/**
 	 * The plugin is added to the jQuery library
@@ -375,7 +550,7 @@
 			
 				//attributes:
                 
-                resizeMode: 'fit',                    //mode can be 'fit', 'flex' or 'overflow'
+                resizeMode: 'fit',              //mode can be 'fit', 'flex' or 'overflow'
                 draggingClass: 'JCLRgripDrag',	//css-class used when a grip is being dragged (for visual feedback purposes)
 				gripInnerHtml: '',				//if it is required to use a custom grip it can be done using some custom HTML				
 				liveDrag: false,				//enables table-layout updating while dragging	
@@ -390,6 +565,10 @@
 				disable: false,					//disables all the enhancements performed in a previously colResized table	
 				partialRefresh: false,			//can be used in combination with postbackSafe when the table is inside of an updatePanel,
                 disabledColumns: [],            //column indexes to be excluded
+                
+                container: null,				
+                cellPadding: 4,
+				refresh: null,
 
 				//events:
 				onDrag: null, 					//callback function to be fired during the column resizing process if liveDrag is enabled
@@ -406,9 +585,10 @@
                 case 'overflow': options.fixed = false; options.overflow = true; break;
             }
 
-            return this.each(function() {				
-             	init( this, options);             
+			this.each(function() {				
+             	init( this, options);    
             });
+			return this;
         }
     });
 })(jQuery);
